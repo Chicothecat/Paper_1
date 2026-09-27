@@ -1,0 +1,226 @@
+=== CELL 6 ===
+class FocalLoss(nn.Module):
+    def __init__(self, weight=None, gamma=2.0, reduction='mean'):
+        super().__init__()
+        self.weight    = weight
+        self.gamma     = gamma
+        self.reduction = reduction
+
+    def forward(self, logits, targets):
+        ce_loss = F.cross_entropy(logits, targets, weight=self.weight, reduction='none')
+        p_t = torch.exp(-ce_loss)
+        focal_loss = (1.0 - p_t) ** self.gamma * ce_loss
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        return focal_loss
+
+
+class FeatureEmbedding(nn.Module):
+    def __init__(self, vocab_sizes, d):
+        super().__init__()
+        self.embs = nn.ModuleList([nn.Embedding(v, d) for v in vocab_sizes])
+        self.pos  = nn.Embedding(len(vocab_sizes), d)
+        self.norm = nn.LayerNorm(d)
+    def forward(self, x):
+        B, L = x.shape
+        h = torch.stack([self.embs[i](x[:,i]) for i in range(L)], dim=1)
+        p = torch.arange(L, device=x.device).unsqueeze(0).expand(B, L)
+        return self.norm(h + self.pos(p))
+
+
+class NeuralLongTermMemory(nn.Module):
+    def __init__(self, d, num_blocks=3, dropout=0.15):
+        super().__init__()
+
+        hidden = d * 4 // 3  
+        self.M_blocks = nn.ModuleList([
+            nn.ModuleDict({
+                'norm': nn.LayerNorm(d),           
+                'fc1':  nn.Linear(d, hidden),
+                'act':  nn.GELU(),                 
+                'drop': nn.Dropout(dropout),
+                'fc2':  nn.Linear(hidden, d),
+            }) for _ in range(num_blocks)
+        ])
+        self.M_norm = nn.LayerNorm(d)
+
+        self.alpha = nn.Linear(d, 1)   
+        self.eta   = nn.Linear(d, 1)   
+        self.theta = nn.Linear(d, 1)   
+
+        self.key   = nn.Linear(d, d)
+        self.value = nn.Linear(d, d)
+        self.query = nn.Linear(d, d)
+
+        self.out_proj = nn.Linear(d, d)
+        self.norm     = nn.LayerNorm(d)
+
+    def _M(self, x):
+        for b in self.M_blocks:
+            h = b['norm'](x)                           
+            h = b['fc2'](b['drop'](b['act'](b['fc1'](h))))
+            x = x + h                                  
+        return self.M_norm(x)
+
+    def forward(self, h):
+        B, L, D = h.shape
+        k = self.key(h);   v = self.value(h);   q = self.query(h)
+        a = torch.sigmoid(self.alpha(h))
+        e = torch.sigmoid(self.eta(h))
+        t = torch.sigmoid(self.theta(h)) * 0.1
+        Mt = torch.zeros(B, D, device=h.device)
+        St = torch.zeros(B, D, device=h.device)
+        outs = []
+        for i in range(L):
+            v_hat = self._M(k[:,i]) + Mt
+            St = e[:,i]*St - t[:,i]*2*(v_hat - v[:,i])
+            Mt = (1 - a[:,i])*Mt + St
+            outs.append(self.out_proj(self._M(q[:,i]) + Mt))
+        return self.norm(torch.stack(outs, dim=1))
+
+
+class SlidingWindowAttention(nn.Module):
+    """Bước 5 — SWA với Pre-LN Residual (thay Post-LN)."""
+    def __init__(self, d, n_heads, window=16):
+        super().__init__()
+        self.attn   = nn.MultiheadAttention(d, n_heads, batch_first=True, dropout=0.1)
+        self.norm   = nn.LayerNorm(d)   
+        self.window = window
+    def forward(self, x):
+        L   = x.size(1)
+        idx = torch.arange(L, device=x.device)
+        d   = idx.unsqueeze(0) - idx.unsqueeze(1)
+        mask = (d > 0) | (d < -(self.window - 1))
+        h = self.norm(x)
+        y, _ = self.attn(h, h, h, attn_mask=mask, need_weights=False)
+        return x + y   # Residual connection
+
+class TitanMAG(nn.Module):
+    def __init__(self, vocab_sizes, n_classes,
+                 d=256, n_heads=8, n_persist=4, swa_window=16,
+                 lmm_blocks=3, lmm_dropout=0.15, head_dropout=0.2):
+        super().__init__()
+        self.embed   = FeatureEmbedding(vocab_sizes, d)
+        self.P       = nn.Parameter(torch.randn(1, n_persist, d) * 0.02)
+
+        self.swa    = SlidingWindowAttention(d, n_heads, swa_window)
+        self.lmm    = NeuralLongTermMemory(d, num_blocks=lmm_blocks, dropout=lmm_dropout)
+
+        self.merge     = nn.Linear(d * 2, d)
+        self.gate      = nn.Linear(d, d)
+        self.gate_norm = nn.LayerNorm(d)
+
+        self.head = nn.Sequential(
+            nn.LayerNorm(d),                     
+            nn.Linear(d, d * 2),                  
+            nn.GELU(),                          
+            nn.Dropout(head_dropout),
+            nn.Linear(d * 2, d),                 
+            nn.GELU(),                            
+            nn.Dropout(head_dropout / 2),
+            nn.Linear(d, n_classes)              
+        )
+        self.np = n_persist
+
+    def forward(self, x):
+        B = x.size(0)
+        h = self.embed(x)                                    
+
+        xt = torch.cat([self.P.expand(B,-1,-1), h], dim=1) 
+
+        y_swa = self.swa(xt)                                
+        y_lmm = self.lmm(xt)                                 
+
+        out = self.merge(torch.cat([y_swa, y_lmm], dim=-1))  
+        out = self.gate_norm(out * torch.sigmoid(self.gate(xt)))  
+
+        out = out[:, self.np:].mean(dim=1)                   
+        return self.head(out)
+
+
+model = TitanMAG(vocab, N_APT_PHASES,
+                 d=D_MODEL, n_heads=N_HEADS, n_persist=N_PERSIST,
+                 swa_window=SWA_WINDOW,
+                 lmm_blocks=LMM_LAYERS, lmm_dropout=LMM_DROPOUT,
+                 head_dropout=HEAD_DROPOUT).to(DEVICE)
+total = sum(p.numel() for p in model.parameters())
+=== CELL 7 ===
+import copy
+
+class FocalLoss(nn.Module):
+    def __init__(self, weight=None, gamma=2.0):
+        super(FocalLoss, self).__init__()
+        self.weight = weight
+        self.gamma = gamma
+
+    def forward(self, logits, targets):
+        ce_loss = F.cross_entropy(logits, targets, reduction='none')
+        p_t = torch.exp(-ce_loss)
+        focal_term = (1 - p_t) ** self.gamma
+        loss = focal_term * ce_loss
+        if self.weight is not None:
+            sample_weights = self.weight[targets]
+            loss = loss * sample_weights
+        return loss.mean()
+
+class_counts = np.bincount(y_tr, minlength=N_APT_PHASES)
+inverse_freq = 1.0 / (class_counts + 1e-6)
+normalized_weights = inverse_freq / np.sum(inverse_freq)
+class_weights_tensor = torch.tensor(normalized_weights, dtype=torch.float32).to(DEVICE)
+criterion = FocalLoss(weight=class_weights_tensor, gamma=2.0)
+
+import copy
+
+history = []
+best_val_loss = float('inf')
+best_model_wts = copy.deepcopy(model.state_dict())
+patience = 7
+patience_counter = 0
+
+for ep in range(1, EPOCHS + 1):
+    model.train()
+    train_losses = []
+    for xb, yb in train_loader:
+        xb, yb = xb.to(DEVICE), yb.to(DEVICE)
+        optimizer.zero_grad()
+        loss = criterion(model(xb), yb)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        train_losses.append(loss.item())
+
+    scheduler.step()
+
+    model.eval()
+    val_losses = []
+    with torch.no_grad():
+        for xb, yb in val_loader:
+            xb, yb = xb.to(DEVICE), yb.to(DEVICE)
+            v_loss = criterion(model(xb), yb)
+            val_losses.append(v_loss.item())
+
+    avg_train_loss = np.mean(train_losses)
+    avg_val_loss = np.mean(val_losses)
+
+    m = run_eval(model, val_loader)
+    history.append({'ep': ep, 'train_loss': avg_train_loss, 'val_loss': avg_val_loss,
+                    **{k: m[k] for k in ['acc', 'f1', 'prec', 'rec']}})
+
+    print(f'[Epoch {ep}/{EPOCHS}] Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | '
+          f'Val Acc: {m["acc"]:.4f} | Val F1: {m["f1"]:.4f}')
+
+    if avg_val_loss < best_val_loss:
+        best_val_loss = avg_val_loss
+        best_model_wts = copy.deepcopy(model.state_dict())
+        torch.save(best_model_wts, 'best_model.pth')
+        patience_counter = 0
+    else:
+        patience_counter += 1
+        if patience_counter >= patience:
+            print(f'Early stopping tại epoch {ep}! Val Loss tốt nhất: {best_val_loss:.4f}')
+            break
+
+model.load_state_dict(torch.load('best_model.pth'))
+print('Đã load checkpoint tốt nhất.')
