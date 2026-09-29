@@ -1,0 +1,21 @@
+﻿Patched 20 notebooks:
+  OK: dapt2020-gelu.ipynb
+  OK: ids-gelu.ipynb
+  OK: leaky-relu-ids -.ipynb
+  OK: leakyrelu-dapt.ipynb
+  OK: relu-dapt.ipynb
+  OK: relu-ids -.ipynb
+  OK: STID-dapt.ipynb
+  OK: STID-IDS.ipynb
+  OK: mag-ids.ipynb
+  OK: titan-dapt.ipynb
+  OK: ids2018-transformer (1).ipynb
+  OK: transformer-dapt2020.ipynb
+  OK: awa-dapt2020.ipynb
+  OK: awa-ids.ipynb
+  OK: erope-dapt-2020.ipynb
+  OK: erope-ids.ipynb
+  OK: mixture-dapt2020.ipynb
+  OK: Mixture-ids.ipynb
+  OK: rope-tpa-dapt.ipynb
+  OK: rope-tpa-ids.ipynb

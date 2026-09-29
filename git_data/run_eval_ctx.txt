@@ -1,0 +1,46 @@
+=== dapt2020-gelu.ipynb ===
+
+  --- Cell 7 (uses run_eval) ---
+  history = []
+      m = run_eval(model, val_loader)
+      history.append({'ep': ep, 'train_loss': avg_train_loss, 'val_loss': avg_val_loss,
+                      **{k: m[k] for k in ['acc', 'f1', 'prec', 'rec']}})
+            f'Val Acc: {m["acc"]:.4f} | Val F1: {m["f1"]:.4f}')
+
+  --- Cell 8 (uses run_eval) ---
+  m = run_eval(model, test_loader)
+  print(f'Accuracy        : {m["acc"]:.4f}')
+  print(f'F1  (weighted)  : {m["f1"]:.4f}')
+  print(f'F1  (macro)     : {f1_score(m["true"], m["pred"], average="macro", zero_division=0):.4f}')
+  print(f'Precision (w)   : {m["prec"]:.4f}')
+  print(f'Recall    (w)   : {m["rec"]:.4f}')
+
+
+=== awa-ids.ipynb ===
+
+  --- Cell 18 (uses run_eval) ---
+  history = []
+      m = run_eval(model, val_loader)
+      history.append({'ep': ep, 'train_loss': avg_train_loss, 'val_loss': avg_val_loss,
+                      **{k: m[k] for k in ['acc', 'f1', 'prec', 'rec']}})
+            f'Val Acc: {m["acc"]:.4f} | Val F1: {m["f1"]:.4f}')
+
+
+=== erope-dapt-2020.ipynb ===
+
+  --- Cell 8 (uses run_eval) ---
+  history = []
+      m = run_eval(model, val_loader)
+      history.append({'ep': ep, 'train_loss': avg_train_loss, 'val_loss': avg_val_loss,
+                      **{k: m[k] for k in ['acc', 'f1', 'prec', 'rec']}})
+            f'Val Acc: {m["acc"]:.4f} | Val F1: {m["f1"]:.4f}')
+
+  --- Cell 9 (uses run_eval) ---
+  m = run_eval(model, test_loader)
+  print(f'Accuracy        : {m["acc"]:.4f}')
+  print(f'F1  (weighted)  : {m["f1"]:.4f}')
+  print(f'F1  (macro)     : {f1_score(m["true"], m["pred"], average="macro", zero_division=0):.4f}')
+  print(f'Precision (w)   : {m["prec"]:.4f}')
+  print(f'Recall    (w)   : {m["rec"]:.4f}')
+
+

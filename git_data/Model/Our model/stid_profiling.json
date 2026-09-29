@@ -1,0 +1,6 @@
+{
+  "Forward FLOPs (G)": 0.123634176,
+  "Training FLOPs (T)": 135.044868639744,
+  "VRAM inference (GB)": 0.080812544,
+  "VRAM train (GB)": 2.241841664
+}
