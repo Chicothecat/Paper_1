@@ -1,1 +1,0 @@
-All cells that use os.path also have import os in the same cell.
